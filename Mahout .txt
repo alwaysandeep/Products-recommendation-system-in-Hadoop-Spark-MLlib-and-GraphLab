@@ -1,0 +1,66 @@
+#Mahout Loading Data:
+
+CREATE TABLE ratings (user STRING, sku STRING, rating FLOAT)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','; 
+
+#Load the data into the ratings table:
+LOAD DATA LOCAL INPATH '/home/training/project/ratings_final.csv' INTO TABLE ratings;
+
+#Create the 10%, 20%, to 100% dataset samples:
+
+INSERT INTO TABLE ten_perc
+  SELECT * FROM ratings
+  LIMIT 81480;
+
+#Create recommender and transfer the data to local:
+
+mahout recommenditembased --input /user/hive/warehouse/ten_perc/* --tempDir temp_proj --output ratings_repository --similarityClassname SIMILARITY_PEARSON_CORRELATION -n 5
+hadoop fs -getmerge ratings_repository ratings_recommended.txt
+
+#Create ALS recommender system procedure (standard iterations set at 20):
+
+mahout parallelALS --input /user/hive/warehouse/ten_perc/* --output als_ratings --lambda 0.1 --implicitFeedback true --alpha 0.8 --numFeatures 2 --numIterations 20 --tempDir tmp
+mahout recommendfactorized --input als_ratings/userRatings/* --userFeatures $als_ratings/U/ --itemFeatures $als_ratings/M/ --numRecommendations 5 --output recommendations --maxRating 5
+
+#Mahout Eclipse Code:
+
+package com.userprediction.recommendApp;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.List;
+
+import org.apache.mahout.cf.taste.impl.common.LongPrimitiveIterator;
+import org.apache.mahout.cf.taste.impl.model.file.FileDataModel;
+import org.apache.mahout.cf.taste.impl.neighborhood.ThresholdUserNeighborhood;
+import org.apache.mahout.cf.taste.impl.recommender.GenericUserBasedRecommender;
+import org.apache.mahout.cf.taste.impl.similarity.PearsonCorrelationSimilarity;
+import org.apache.mahout.cf.taste.model.DataModel;
+import org.apache.mahout.cf.taste.neighborhood.UserNeighborhood;
+import org.apache.mahout.cf.taste.recommender.RecommendedItem;
+import org.apache.mahout.cf.taste.recommender.UserBasedRecommender;
+import org.apache.mahout.cf.taste.similarity.UserSimilarity;
+
+/**
+ * Hello world!
+ *
+ */
+public class App 
+{
+	public static void main( String[] args ) throws Exception
+	{
+		DataModel model = new FileDataModel(new File("Data/ratings_final.csv"));
+		UserSimilarity similarity = new PearsonCorrelationSimilarity(model);
+		UserNeighborhood neighborhood = new ThresholdUserNeighborhood(0.1, similarity, model);
+		UserBasedRecommender recommender = new GenericUserBasedRecommender(model, neighborhood, similarity);
+		for(LongPrimitiveIterator users=model.getUserIDs();users.hasNext();)
+		{
+			long userId = users.nextLong();
+			List<RecommendedItem> recommendations = recommender.recommend(userId,5);
+			for (RecommendedItem recommendation : recommendations) {
+				System.out.println(recommendation);
+			}
+		}
+	}
+}
